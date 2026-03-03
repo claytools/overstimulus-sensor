@@ -71,10 +71,6 @@ input[type="number"] {
   font-size: 16px;
 }
 
-input[type="range"] {
-  width: min(520px, 85vw);
-}
-
 #controls {
   margin-top: 10px;
 }
