@@ -2,6 +2,8 @@ const startButton = document.getElementById("startButton");
 const volumeLevel = document.getElementById("volumeLevel");
 const colorDisplay = document.getElementById("colorDisplay");
 const sensitivitySlider = document.getElementById("sensitivity");
+const historyWindowMS = 60000; // 60 seconds
+const volumeHistory = []; // will store { time, value }
 
 const volumeHistory = [];
 const historyLength = 100; // ~1–2 seconds depending on FPS
@@ -60,20 +62,37 @@ function checkVolume() {
 
     analyser.getByteFrequencyData(dataArray);
 
+    // Calculate instant volume
     let sum = 0;
     for (let i = 0; i < dataArray.length; i++) {
         sum += dataArray[i];
     }
 
     const instant = sum / dataArray.length;
+    const now = Date.now();
 
-    // Add to history
-    volumeHistory.push(instant);
-    if (volumeHistory.length > historyLength) {
+    // Store timestamped volume
+    volumeHistory.push({
+        time: now,
+        value: instant
+    });
+
+    // Remove values older than 60 seconds
+    const historyWindowMS = 60000;
+    while (
+        volumeHistory.length &&
+        now - volumeHistory[0].time > historyWindowMS
+    ) {
         volumeHistory.shift();
     }
 
-    const average = volumeHistory.reduce((a, b) => a + b, 0) / volumeHistory.length;
+    // Compute rolling 60-second average
+    let avgSum = 0;
+    for (let i = 0; i < volumeHistory.length; i++) {
+        avgSum += volumeHistory[i].value;
+    }
+
+    const average = avgSum / volumeHistory.length;
 
     volumeLevel.textContent = Math.round(average);
 
