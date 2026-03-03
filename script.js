@@ -106,15 +106,15 @@ function updateColor(level) {
     const yellowMax = parseFloat(document.getElementById("yellowMax").value);
     const orangeMax = parseFloat(document.getElementById("orangeMax").value);
 
-    colorDisplay.className = "";
+    document.body.className = "";
 
     if (level <= greenMax) {
-        colorDisplay.classList.add("green");
+        document.body.classList.add("green");
     } else if (level <= yellowMax) {
-        colorDisplay.classList.add("yellow");
+        document.body.classList.add("yellow");
     } else if (level <= orangeMax) {
-        colorDisplay.classList.add("orange");
+        document.body.classList.add("orange");
     } else {
-        colorDisplay.classList.add("red");
+        document.body.classList.add("red");
     }
 }
