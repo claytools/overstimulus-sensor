@@ -3,17 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sensory Volume Monitor</title>
+  <title>Overstimulation Sensor</title>
   <link rel="stylesheet" href="style.css" />
+
+  <!-- Charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
-<!-- Start with a visible default zone -->
 <body class="green">
-  <h1>Sensory Volume Monitor</h1>
+  <h1>Overstimulation Sensor</h1>
 
   <div id="readout">
     <div id="volumeLevel">0</div>
     <div id="zoneLabel">GREEN</div>
+
+    <div id="sessionInfo">
+      <div><strong>Started:</strong> <span id="startedAt">—</span></div>
+      <div><strong>Runtime:</strong> <span id="runtime">00:00</span></div>
+      <div><strong>Live Avg (fast):</strong> <span id="fastAvg">0</span></div>
+      <div><strong>Log Avg (1 min):</strong> <span id="slowAvg">0</span></div>
+    </div>
   </div>
 
   <div id="settingsPanel">
@@ -24,6 +33,40 @@
 
   <div id="controls">
     <button id="startButton">Start Monitoring</button>
+    <button id="stopButton" disabled>Stop & Summary</button>
+  </div>
+
+  <!-- Summary -->
+  <div id="summaryOverlay" class="hidden">
+    <div id="summaryCard">
+      <h2>Session Summary</h2>
+
+      <div class="summaryGrid">
+        <div class="summaryItem"><strong>Total time:</strong> <span id="sumTotal">—</span></div>
+        <div class="summaryItem"><strong>Green time:</strong> <span id="sumGreen">—</span></div>
+        <div class="summaryItem"><strong>Yellow time:</strong> <span id="sumYellow">—</span></div>
+        <div class="summaryItem"><strong>Orange time:</strong> <span id="sumOrange">—</span></div>
+        <div class="summaryItem"><strong>Red time:</strong> <span id="sumRed">—</span></div>
+        <div class="summaryItem"><strong>Started at:</strong> <span id="sumStart">—</span></div>
+        <div class="summaryItem"><strong>Ended at:</strong> <span id="sumEnd">—</span></div>
+      </div>
+
+      <div class="charts">
+        <div class="chartBox">
+          <h3>Volume vs Time (1-minute avg)</h3>
+          <canvas id="lineChart"></canvas>
+        </div>
+
+        <div class="chartBox">
+          <h3>Time in Zones</h3>
+          <canvas id="pieChart"></canvas>
+        </div>
+      </div>
+
+      <div id="summaryButtons">
+        <button id="closeSummary">Close</button>
+      </div>
+    </div>
   </div>
 
   <script src="script.js"></script>
