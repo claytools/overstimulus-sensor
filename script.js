@@ -370,4 +370,4 @@ function resetSession() {
   startedAtEl.textContent = "—";
   runtimeEl.textContent = "00:00";
   document.body.className = "green";
-}
+} 
