@@ -1,7 +1,6 @@
 const startButton = document.getElementById("startButton");
 const volumeLevel = document.getElementById("volumeLevel");
 const zoneLabel = document.getElementById("zoneLabel");
-const sensitivitySlider = document.getElementById("sensitivity");
 
 let audioContext;
 let analyser;
