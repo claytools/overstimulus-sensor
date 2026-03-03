@@ -1,38 +1,75 @@
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
+/* Reset */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
 }
 
-#colorDisplay {
-  width: 250px;
-  height: 250px;
-  margin: 20px auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 20px;
-  font-size: 48px;
-  color: white;
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    text-align: center;
+    transition: background-color 2s ease;
+    color: white;
 }
 
-.green {
-  background-color: green;
+/* Large Volume Display */
+#volumeLevel {
+    font-size: 120px;
+    font-weight: bold;
+    margin: 30px 0;
 }
 
-.yellow {
-  background-color: gold;
-}
-
-.orange {
-  background-color: orange;
-}
-
-.red {
-  background-color: red;
-}
-
+/* Button Styling */
 button {
-  padding: 10px 20px;
-  font-size: 16px;
+    padding: 15px 30px;
+    font-size: 18px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    background-color: rgba(0, 0, 0, 0.3);
+    color: white;
+    margin-bottom: 20px;
+}
+
+button:hover {
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* Input Styling */
+input[type="number"],
+input[type="range"] {
+    padding: 8px;
+    font-size: 16px;
+    border-radius: 5px;
+    border: none;
+    margin: 5px;
+}
+
+/* Zone Colors */
+body.green {
+    background-color: #2ecc71;
+}
+
+body.yellow {
+    background-color: #f1c40f;
+    color: black;
+}
+
+body.orange {
+    background-color: #e67e22;
+}
+
+body.red {
+    background-color: #e74c3c;
+}
+
+/* Small Labels */
+label {
+    font-size: 18px;
+    margin-top: 10px;
 }
