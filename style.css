@@ -145,5 +145,42 @@ body.red { background-color: #e74c3c; color: white; }
 #summaryButtons {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
   margin-top: 12px;
+}
+
+/* PRINT REPORT */
+@media print {
+  /* Hide main UI */
+  body > :not(#summaryOverlay) { display: none !important; }
+
+  /* Turn overlay into normal page content */
+  #summaryOverlay {
+    position: static !important;
+    inset: auto !important;
+    background: transparent !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+
+  /* Make the summary white for printing */
+  #summaryCard {
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+  }
+
+  #summaryCard h2, #summaryCard h3 { color: #000 !important; }
+  .chartBox { background: transparent !important; border: 1px solid #ddd; }
+
+  /* Hide buttons on print */
+  #summaryButtons { display: none !important; }
+
+  /* Ensure charts fit */
+  canvas { max-width: 100% !important; }
 }
