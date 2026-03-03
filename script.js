@@ -31,9 +31,7 @@ let audioContext;
 let analyser;
 let microphone;
 let zeroGain;
-
-// Time-domain buffer for RMS
-let timeData;
+let dataArray;
 
 // Loop control
 let isRunning = false;
@@ -44,19 +42,17 @@ let sessionStartMs = null;
 let sessionEndMs = null;
 let runtimeTimerId = null;
 
-// Rolling window histories (timestamped RMS)
-const fastWindowMS = 8000;    // 🔥 responsive live feel (try 6000–12000)
-const slowWindowMS = 60000;   // ✅ 1-minute window for zones “truth”
-const rmsHistory = [];        // { time, value } where value is 0..255-ish RMS
+// Rolling histories (timestamped)
+const fastWindowMS = 10000;   // responsive "now" reading
+const slowWindowMS = 60000;   // 1-minute rolling avg for zones/logging
+const instantHistory = [];    // { time, value }
 
-// Per-minute logging buckets
-const minuteWindowMS = 60000;
-let currentMinuteIndex = null;
-let currentMinuteSamples = []; // raw RMS samples for the active minute
+// Sampling for the chart
+const chartSampleEveryMS = 15000; // one point every 15 seconds
+let lastChartSampleMs = 0;
 
-// Logged per-minute points for charts
-// { tMs (minute start), mean, p95, combo, zone }
-const loggedPoints = [];
+// Logged series (for summary charts)
+const loggedPoints = []; // { tMs, avg1m, zone }
 
 // Zone timing (ms)
 let lastZoneUpdateMs = 0;
@@ -101,10 +97,8 @@ startButton.addEventListener("click", async () => {
 
     microphone = audioContext.createMediaStreamSource(stream);
     analyser = audioContext.createAnalyser();
-
-    // Larger window gives steadier RMS
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.0; // we do our own smoothing via windows
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.8;
 
     microphone.connect(analyser);
 
@@ -114,13 +108,10 @@ startButton.addEventListener("click", async () => {
     analyser.connect(zeroGain);
     zeroGain.connect(audioContext.destination);
 
-    timeData = new Uint8Array(analyser.fftSize);
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
 
     lastZoneUpdateMs = Date.now();
-
-    // Minute bucket init
-    currentMinuteIndex = 0;
-    currentMinuteSamples = [];
+    lastChartSampleMs = 0;
 
     checkVolume();
   } catch (err) {
@@ -139,6 +130,7 @@ stopButton.addEventListener("click", () => {
 closeSummaryBtn.addEventListener("click", () => hideSummary());
 
 printSummaryBtn.addEventListener("click", () => {
+  // Ensure overlay is visible, then print
   summaryOverlay.classList.remove("hidden");
   window.print();
 });
@@ -147,84 +139,33 @@ printSummaryBtn.addEventListener("click", () => {
 function checkVolume() {
   if (!isRunning) return;
 
-  // 1) Measure loudness via RMS (time-domain)
-  analyser.getByteTimeDomainData(timeData);
+  analyser.getByteFrequencyData(dataArray);
 
-  // Convert 0..255 to -1..1, compute RMS
-  let sumSquares = 0;
-  for (let i = 0; i < timeData.length; i++) {
-    const v = (timeData[i] - 128) / 128; // approx -1..1
-    sumSquares += v * v;
-  }
-  const rms = Math.sqrt(sumSquares / timeData.length);
-
-  // Scale RMS to 0..255-ish for consistency with your thresholds
-  const instant = rms * 255;
+  let sum = 0;
+  for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+  const instant = sum / dataArray.length;
 
   const now = Date.now();
 
-  // 2) Save RMS to history (for rolling windows)
-  rmsHistory.push({ time: now, value: instant });
-  trimHistory(rmsHistory, now, slowWindowMS);
+  instantHistory.push({ time: now, value: instant });
+  trimHistory(instantHistory, now, slowWindowMS);
 
-  // 3) Fast/slow stats
-  const fastMean = rollingMean(rmsHistory, now, fastWindowMS);
-  const slowMean = rollingMean(rmsHistory, now, slowWindowMS);
-  const slowP95 = rollingPercentile(rmsHistory, now, slowWindowMS, 0.95);
+  const fastAvg = rollingAverage(instantHistory, now, fastWindowMS);
+  const slowAvg = rollingAverage(instantHistory, now, slowWindowMS);
 
-  // Combo metric: half mean, half near-peak (robust to one-offs)
-  const slowCombo = 0.5 * slowMean + 0.5 * slowP95;
+  volumeLevel.textContent = Math.round(fastAvg);
+  fastAvgEl.textContent = Math.round(fastAvg);
+  slowAvgEl.textContent = Math.round(slowAvg);
 
-  // Display:
-  // Big number = fast mean (responsive)
-  // Fast Avg = fast mean
-  // Log Avg (1 min) = combo (mean + p95)/2 (what zones use)
-  volumeLevel.textContent = Math.round(fastMean);
-  fastAvgEl.textContent = Math.round(fastMean);
-  slowAvgEl.textContent = Math.round(slowCombo);
-
-  // 4) Zones based on 1-minute combo
-  const zone = getZone(slowCombo);
+  const zone = getZone(slowAvg);
   updateZone(zone);
 
-  // 5) Per-minute logging (mean + p95 for each minute)
-  const minuteIndex = Math.floor((now - sessionStartMs) / minuteWindowMS);
-
-  // If we moved into a new minute, finalize the previous minute
-  if (currentMinuteIndex === null) currentMinuteIndex = minuteIndex;
-
-  if (minuteIndex !== currentMinuteIndex) {
-    finalizeMinuteBucket(currentMinuteIndex);
-    currentMinuteIndex = minuteIndex;
-    currentMinuteSamples = [];
+  if (now - lastChartSampleMs >= chartSampleEveryMS) {
+    lastChartSampleMs = now;
+    loggedPoints.push({ tMs: now, avg1m: slowAvg, zone });
   }
 
-  // Add the instant RMS sample to current minute bucket
-  currentMinuteSamples.push(instant);
-
   animationId = requestAnimationFrame(checkVolume);
-}
-
-// Finalize one minute’s bucket into loggedPoints
-function finalizeMinuteBucket(minuteIdx) {
-  if (!sessionStartMs) return;
-  if (!currentMinuteSamples.length) return;
-
-  const minuteStartMs = sessionStartMs + minuteIdx * minuteWindowMS;
-
-  const mean = arrayMean(currentMinuteSamples);
-  const p95 = arrayPercentile(currentMinuteSamples, 0.95);
-  const combo = 0.5 * mean + 0.5 * p95;
-
-  const zone = getZone(combo);
-
-  loggedPoints.push({
-    tMs: minuteStartMs,
-    mean,
-    p95,
-    combo,
-    zone
-  });
 }
 
 // Zone logic
@@ -270,11 +211,6 @@ function stopMonitoring() {
   const dt = now - lastZoneUpdateMs;
   if (dt > 0) zoneTime[currentZone] += dt;
 
-  // Finalize the current minute bucket so the chart includes it
-  if (sessionStartMs !== null && currentMinuteIndex !== null) {
-    finalizeMinuteBucket(currentMinuteIndex);
-  }
-
   try { audioContext && audioContext.close(); } catch (_) {}
 
   startButton.disabled = false;
@@ -296,26 +232,21 @@ function showSummary() {
   sumStart.textContent = sessionStartMs ? formatClockTime(sessionStartMs) : "—";
   sumEnd.textContent = sessionEndMs ? formatClockTime(sessionEndMs) : "—";
 
+  // Overall avg based on logged points (1-min avg values)
+  if (loggedPoints.length) {
+    const avg = loggedPoints.reduce((a, p) => a + p.avg1m, 0) / loggedPoints.length;
+    sumOverallAvg.textContent = Math.round(avg);
+  } else {
+    sumOverallAvg.textContent = "—";
+  }
+
   // Thresholds used
   const greenMax = parseFloat(document.getElementById("greenMax").value);
   const yellowMax = parseFloat(document.getElementById("yellowMax").value);
   const orangeMax = parseFloat(document.getElementById("orangeMax").value);
   sumThresholds.textContent = `Green≤${greenMax}, Yellow≤${yellowMax}, Orange≤${orangeMax}, Red>${orangeMax}`;
 
-  sumSamples.textContent = String(loggedPoints.length); // now "minutes logged"
-
-  // Overall stats from per-minute points
-  if (loggedPoints.length) {
-    const overallMean = loggedPoints.reduce((a, p) => a + p.mean, 0) / loggedPoints.length;
-    const overallP95 = loggedPoints.reduce((a, p) => a + p.p95, 0) / loggedPoints.length;
-    const overallCombo = 0.5 * overallMean + 0.5 * overallP95;
-
-    // Fits existing label, but includes all three values
-    sumOverallAvg.textContent =
-      `Mean ${Math.round(overallMean)} | P95 ${Math.round(overallP95)} | Combo ${Math.round(overallCombo)}`;
-  } else {
-    sumOverallAvg.textContent = "—";
-  }
+  sumSamples.textContent = String(loggedPoints.length);
 
   renderLineChart();
   renderPieChart();
@@ -333,27 +264,18 @@ function renderLineChart() {
   if (lineChart) lineChart.destroy();
 
   const labels = loggedPoints.map(p => formatElapsed(p.tMs - sessionStartMs));
-  const meanData = loggedPoints.map(p => Math.round(p.mean));
-  const p95Data = loggedPoints.map(p => Math.round(p.p95));
+  const data = loggedPoints.map(p => Math.round(p.avg1m));
 
   lineChart = new Chart(ctx, {
     type: "line",
     data: {
       labels,
-      datasets: [
-        {
-          label: "Per-minute mean (RMS)",
-          data: meanData,
-          tension: 0.25,
-          pointRadius: 2
-        },
-        {
-          label: "Per-minute 95th percentile (RMS)",
-          data: p95Data,
-          tension: 0.25,
-          pointRadius: 2
-        }
-      ]
+      datasets: [{
+        label: "1-minute avg volume",
+        data,
+        tension: 0.25,
+        pointRadius: 2
+      }]
     },
     options: {
       responsive: true,
@@ -361,7 +283,7 @@ function renderLineChart() {
       plugins: { legend: { display: true } },
       scales: {
         x: { title: { display: true, text: "Elapsed time" } },
-        y: { title: { display: true, text: "Loudness (0–255 RMS scale)" }, beginAtZero: true }
+        y: { title: { display: true, text: "Volume (0–255 scale)" }, beginAtZero: true }
       }
     }
   });
@@ -397,12 +319,12 @@ function renderPieChart() {
   });
 }
 
-// Rolling window helpers
+// Helpers
 function trimHistory(arr, now, windowMS) {
   while (arr.length && now - arr[0].time > windowMS) arr.shift();
 }
 
-function rollingMean(arr, now, windowMS) {
+function rollingAverage(arr, now, windowMS) {
   let sum = 0;
   let count = 0;
   for (let i = arr.length - 1; i >= 0; i--) {
@@ -413,31 +335,6 @@ function rollingMean(arr, now, windowMS) {
   return count ? (sum / count) : 0;
 }
 
-function rollingPercentile(arr, now, windowMS, p) {
-  const values = [];
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (now - arr[i].time > windowMS) break;
-    values.push(arr[i].value);
-  }
-  return values.length ? arrayPercentile(values, p) : 0;
-}
-
-// Array stats
-function arrayMean(values) {
-  let s = 0;
-  for (let i = 0; i < values.length; i++) s += values[i];
-  return s / values.length;
-}
-
-function arrayPercentile(values, p) {
-  // p in [0,1], e.g. 0.95
-  const sorted = values.slice().sort((a, b) => a - b);
-  const n = sorted.length;
-  const idx = Math.max(0, Math.min(n - 1, Math.ceil(p * n) - 1));
-  return sorted[idx];
-}
-
-// Formatting
 function formatDuration(ms) {
   const totalSec = Math.floor(ms / 1000);
   const m = Math.floor(totalSec / 60);
@@ -458,7 +355,7 @@ function formatClockTime(ms) {
 }
 
 function resetSession() {
-  rmsHistory.length = 0;
+  instantHistory.length = 0;
   loggedPoints.length = 0;
 
   zoneTime.green = 0;
@@ -471,9 +368,6 @@ function resetSession() {
 
   sessionStartMs = null;
   sessionEndMs = null;
-
-  currentMinuteIndex = null;
-  currentMinuteSamples = [];
 
   volumeLevel.textContent = "0";
   fastAvgEl.textContent = "0";
