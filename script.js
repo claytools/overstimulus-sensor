@@ -1,26 +1,88 @@
+// UI
 const startButton = document.getElementById("startButton");
+const stopButton = document.getElementById("stopButton");
+
 const volumeLevel = document.getElementById("volumeLevel");
 const zoneLabel = document.getElementById("zoneLabel");
 
+const startedAtEl = document.getElementById("startedAt");
+const runtimeEl = document.getElementById("runtime");
+const fastAvgEl = document.getElementById("fastAvg");
+const slowAvgEl = document.getElementById("slowAvg");
+
+const summaryOverlay = document.getElementById("summaryOverlay");
+const closeSummaryBtn = document.getElementById("closeSummary");
+
+const sumTotal = document.getElementById("sumTotal");
+const sumGreen = document.getElementById("sumGreen");
+const sumYellow = document.getElementById("sumYellow");
+const sumOrange = document.getElementById("sumOrange");
+const sumRed = document.getElementById("sumRed");
+const sumStart = document.getElementById("sumStart");
+const sumEnd = document.getElementById("sumEnd");
+
+// Audio
 let audioContext;
 let analyser;
 let microphone;
 let zeroGain;
 let dataArray;
 
+// Loop control
 let isRunning = false;
 let animationId = null;
 
-// Rolling window: last 60 seconds
-const historyWindowMS = 60000;
-const volumeHistory = []; // { time, value }
+// Session time
+let sessionStartMs = null;
+let sessionEndMs = null;
+let runtimeTimerId = null;
+
+// Rolling histories (timestamped)
+const fastWindowMS = 10000;   // 🔥 faster “what’s happening now” (10s)
+const slowWindowMS = 60000;   // ✅ 1-minute rolling average for logging/zones
+const instantHistory = [];    // { time, value }
+
+// Sampling for the chart
+const chartSampleEveryMS = 15000; // ⬅️ 15 seconds per point (change to 60000 if you want fewer points)
+let lastChartSampleMs = 0;
+
+// Logged series (for summary charts)
+const loggedPoints = []; // { tMs, avg1m, zone }
+
+// Zone timing (ms)
+let lastZoneUpdateMs = 0;
+const zoneTime = { green: 0, yellow: 0, orange: 0, red: 0 };
+let currentZone = "green";
+
+// Charts
+let lineChart = null;
+let pieChart = null;
 
 startButton.addEventListener("click", async () => {
   if (isRunning) return;
 
   try {
-    isRunning = true;
+    // Reset any old summary display
+    hideSummary();
 
+    // Reset session state
+    resetSession();
+
+    isRunning = true;
+    startButton.disabled = true;
+    stopButton.disabled = false;
+
+    // Start session time
+    sessionStartMs = Date.now();
+    startedAtEl.textContent = formatClockTime(sessionStartMs);
+    runtimeEl.textContent = "00:00";
+
+    // Start runtime ticker
+    runtimeTimerId = setInterval(() => {
+      runtimeEl.textContent = formatDuration(Date.now() - sessionStartMs);
+    }, 250);
+
+    // Audio context / mic
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     await audioContext.resume();
 
@@ -30,9 +92,12 @@ startButton.addEventListener("click", async () => {
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;
 
+    // A bit of built-in smoothing on the analyser itself
+    analyser.smoothingTimeConstant = 0.8;
+
     microphone.connect(analyser);
 
-    // Keep processing active without audible output
+    // Keep analyser processing active without audible output
     zeroGain = audioContext.createGain();
     zeroGain.gain.value = 0;
     analyser.connect(zeroGain);
@@ -40,67 +105,269 @@ startButton.addEventListener("click", async () => {
 
     dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-    // Reset history each run
-    volumeHistory.length = 0;
+    // Initialize zone timing reference points
+    lastZoneUpdateMs = Date.now();
+    lastChartSampleMs = 0;
 
     checkVolume();
   } catch (err) {
     console.error("Microphone error:", err);
     alert("Could not access microphone: " + err.message);
-    isRunning = false;
+
+    // Cleanly roll back UI state
+    stopMonitoring();
   }
 });
 
+stopButton.addEventListener("click", () => {
+  if (!isRunning) return;
+  stopMonitoring();
+  showSummary();
+});
+
+closeSummaryBtn.addEventListener("click", () => {
+  hideSummary();
+});
+
+// Main loop
 function checkVolume() {
   if (!isRunning) return;
 
   analyser.getByteFrequencyData(dataArray);
 
-  // Instant volume (0..255-ish scale)
+  // Instant volume estimate (0..255-ish)
   let sum = 0;
   for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
   const instant = sum / dataArray.length;
 
   const now = Date.now();
 
-  // Save timestamped value
-  volumeHistory.push({ time: now, value: instant });
+  // Save instant
+  instantHistory.push({ time: now, value: instant });
 
-  // Drop anything older than the window
-  while (volumeHistory.length && now - volumeHistory[0].time > historyWindowMS) {
-    volumeHistory.shift();
+  // Drop old samples (keep enough to cover the slow window)
+  trimHistory(instantHistory, now, slowWindowMS);
+
+  // Compute fast + slow rolling averages
+  const fastAvg = rollingAverage(instantHistory, now, fastWindowMS);
+  const slowAvg = rollingAverage(instantHistory, now, slowWindowMS);
+
+  // Display:
+  // - Big number = fast average (more responsive)
+  // - Also show both values
+  volumeLevel.textContent = Math.round(fastAvg);
+  fastAvgEl.textContent = Math.round(fastAvg);
+  slowAvgEl.textContent = Math.round(slowAvg);
+
+  // Zone uses the slow average so it reflects sustained loudness
+  const zone = getZone(slowAvg);
+  updateZone(zone);
+
+  // Log points for chart every N seconds
+  if (now - lastChartSampleMs >= chartSampleEveryMS) {
+    lastChartSampleMs = now;
+    loggedPoints.push({ tMs: now, avg1m: slowAvg, zone });
   }
-
-  // Average over window
-  let avgSum = 0;
-  for (let i = 0; i < volumeHistory.length; i++) avgSum += volumeHistory[i].value;
-  const average = avgSum / volumeHistory.length;
-
-  volumeLevel.textContent = Math.round(average);
-
-  updateColorAndLabel(average);
 
   animationId = requestAnimationFrame(checkVolume);
 }
 
-function updateColorAndLabel(level) {
+// Zone logic
+function getZone(level) {
   const greenMax = parseFloat(document.getElementById("greenMax").value);
   const yellowMax = parseFloat(document.getElementById("yellowMax").value);
   const orangeMax = parseFloat(document.getElementById("orangeMax").value);
 
-  document.body.className = "";
+  if (level <= greenMax) return "green";
+  if (level <= yellowMax) return "yellow";
+  if (level <= orangeMax) return "orange";
+  return "red";
+}
 
-  if (level <= greenMax) {
-    document.body.classList.add("green");
-    zoneLabel.textContent = "GREEN";
-  } else if (level <= yellowMax) {
-    document.body.classList.add("yellow");
-    zoneLabel.textContent = "YELLOW";
-  } else if (level <= orangeMax) {
-    document.body.classList.add("orange");
-    zoneLabel.textContent = "ORANGE";
-  } else {
-    document.body.classList.add("red");
-    zoneLabel.textContent = "RED";
+function updateZone(newZone) {
+  const now = Date.now();
+
+  // Accumulate time in the *previous* zone since last update
+  const dt = now - lastZoneUpdateMs;
+  if (dt > 0) zoneTime[currentZone] += dt;
+
+  // Switch zone if changed
+  currentZone = newZone;
+  lastZoneUpdateMs = now;
+
+  // Update UI
+  document.body.className = newZone;
+  zoneLabel.textContent = newZone.toUpperCase();
+}
+
+// Stop
+function stopMonitoring() {
+  if (!isRunning) return;
+
+  isRunning = false;
+  sessionEndMs = Date.now();
+
+  // Stop animation loop
+  if (animationId) cancelAnimationFrame(animationId);
+  animationId = null;
+
+  // Stop runtime timer
+  if (runtimeTimerId) clearInterval(runtimeTimerId);
+  runtimeTimerId = null;
+
+  // Final zone time accumulation
+  const now = Date.now();
+  const dt = now - lastZoneUpdateMs;
+  if (dt > 0) zoneTime[currentZone] += dt;
+
+  // Close audio context
+  try { audioContext && audioContext.close(); } catch (_) {}
+
+  startButton.disabled = false;
+  stopButton.disabled = true;
+}
+
+// Summary
+function showSummary() {
+  // Fill summary stats
+  const total = (sessionEndMs ?? Date.now()) - (sessionStartMs ?? Date.now());
+
+  sumTotal.textContent = formatDuration(total);
+  sumGreen.textContent = formatDuration(zoneTime.green);
+  sumYellow.textContent = formatDuration(zoneTime.yellow);
+  sumOrange.textContent = formatDuration(zoneTime.orange);
+  sumRed.textContent = formatDuration(zoneTime.red);
+
+  sumStart.textContent = sessionStartMs ? formatClockTime(sessionStartMs) : "—";
+  sumEnd.textContent = sessionEndMs ? formatClockTime(sessionEndMs) : "—";
+
+  // Render charts
+  renderLineChart();
+  renderPieChart();
+
+  summaryOverlay.classList.remove("hidden");
+}
+
+function hideSummary() {
+  summaryOverlay.classList.add("hidden");
+}
+
+// Charts
+function renderLineChart() {
+  const ctx = document.getElementById("lineChart").getContext("2d");
+
+  // Destroy old chart if needed
+  if (lineChart) lineChart.destroy();
+
+  const labels = loggedPoints.map(p => formatElapsed(p.tMs - sessionStartMs));
+  const data = loggedPoints.map(p => Math.round(p.avg1m));
+
+  lineChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: "1-minute avg volume",
+        data,
+        tension: 0.25,
+        pointRadius: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        legend: { display: true }
+      },
+      scales: {
+        x: { title: { display: true, text: "Elapsed time" } },
+        y: { title: { display: true, text: "Volume (0–255 scale)" }, beginAtZero: true }
+      }
+    }
+  });
+}
+
+function renderPieChart() {
+  const ctx = document.getElementById("pieChart").getContext("2d");
+  if (pieChart) pieChart.destroy();
+
+  pieChart = new Chart(ctx, {
+    type: "pie",
+    data: {
+      labels: ["Green", "Yellow", "Orange", "Red"],
+      datasets: [{
+        data: [
+          Math.round(zoneTime.green / 1000),
+          Math.round(zoneTime.yellow / 1000),
+          Math.round(zoneTime.orange / 1000),
+          Math.round(zoneTime.red / 1000)
+        ]
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: "bottom" } }
+    }
+  });
+}
+
+// Helpers
+function trimHistory(arr, now, windowMS) {
+  while (arr.length && now - arr[0].time > windowMS) arr.shift();
+}
+
+function rollingAverage(arr, now, windowMS) {
+  // average over entries within windowMS
+  let sum = 0;
+  let count = 0;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (now - arr[i].time > windowMS) break;
+    sum += arr[i].value;
+    count++;
   }
+  return count ? (sum / count) : 0;
+}
+
+function formatDuration(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatElapsed(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatClockTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function resetSession() {
+  instantHistory.length = 0;
+  loggedPoints.length = 0;
+
+  zoneTime.green = 0;
+  zoneTime.yellow = 0;
+  zoneTime.orange = 0;
+  zoneTime.red = 0;
+
+  currentZone = "green";
+  lastZoneUpdateMs = Date.now();
+
+  sessionStartMs = null;
+  sessionEndMs = null;
+
+  // Reset UI
+  volumeLevel.textContent = "0";
+  fastAvgEl.textContent = "0";
+  slowAvgEl.textContent = "0";
+  zoneLabel.textContent = "GREEN";
+  startedAtEl.textContent = "—";
+  runtimeEl.textContent = "00:00";
+  document.body.className = "green";
 }
