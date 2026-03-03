@@ -46,6 +46,10 @@ startButton.addEventListener("click", async () => {
     updateColor(average);
 
     requestAnimationFrame(checkVolume);
+
+     }
+
+  checkVolume();
 });
 
 function updateColor(level) {
