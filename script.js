@@ -49,17 +49,19 @@ startButton.addEventListener("click", async () => {
 });
 
 function updateColor(level) {
-  let sensitivity = sensitivitySlider.value;
+    const greenMax = parseFloat(document.getElementById("greenMax").value);
+    const yellowMax = parseFloat(document.getElementById("yellowMax").value);
+    const orangeMax = parseFloat(document.getElementById("orangeMax").value);
 
-  colorDisplay.className = "";
+    colorDisplay.className = "";
 
-  if (level < sensitivity * 0.5) {
-    colorDisplay.classList.add("green");
-  } else if (level < sensitivity * 0.75) {
-    colorDisplay.classList.add("yellow");
-  } else if (level < sensitivity) {
-    colorDisplay.classList.add("orange");
-  } else {
-    colorDisplay.classList.add("red");
-  }
+    if (level <= greenMax) {
+        colorDisplay.classList.add("green");
+    } else if (level <= yellowMax) {
+        colorDisplay.classList.add("yellow");
+    } else if (level <= orangeMax) {
+        colorDisplay.classList.add("orange");
+    } else {
+        colorDisplay.classList.add("red");
+    }
 }
