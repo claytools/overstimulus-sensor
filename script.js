@@ -1,12 +1,7 @@
 const startButton = document.getElementById("startButton");
 const volumeLevel = document.getElementById("volumeLevel");
-const colorDisplay = document.getElementById("colorDisplay");
+const zoneLabel = document.getElementById("zoneLabel");
 const sensitivitySlider = document.getElementById("sensitivity");
-const historyWindowMS = 60000; // 60 seconds
-const volumeHistory = []; // will store { time, value }
-
-const volumeHistory = [];
-const historyLength = 100; // ~1–2 seconds depending on FPS
 
 let audioContext;
 let analyser;
@@ -17,104 +12,96 @@ let dataArray;
 let isRunning = false;
 let animationId = null;
 
+// Rolling window: last 60 seconds
+const historyWindowMS = 60000;
+const volumeHistory = []; // { time, value }
+
 startButton.addEventListener("click", async () => {
-    if (isRunning) return;
+  if (isRunning) return;
 
-    try {
-        isRunning = true;
+  try {
+    isRunning = true;
 
-        // Create audio context
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    await audioContext.resume();
 
-        // Required in some browsers
-        await audioContext.resume();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    microphone = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
 
-        microphone = audioContext.createMediaStreamSource(stream);
-        analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
+    microphone.connect(analyser);
 
-        microphone.connect(analyser);
+    // Keep processing active without audible output
+    zeroGain = audioContext.createGain();
+    zeroGain.gain.value = 0;
+    analyser.connect(zeroGain);
+    zeroGain.connect(audioContext.destination);
 
-        // Ensure analyser stays active without hearing mic
-        zeroGain = audioContext.createGain();
-        zeroGain.gain.value = 0;
-        analyser.connect(zeroGain);
-        zeroGain.connect(audioContext.destination);
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-        dataArray = new Uint8Array(analyser.frequencyBinCount);
+    // Reset history each run
+    volumeHistory.length = 0;
 
-        // Reset history
-        volumeHistory.length = 0;
-
-        checkVolume();
-
-    } catch (err) {
-        console.error("Microphone error:", err);
-        alert("Could not access microphone: " + err.message);
-        isRunning = false;
-    }
+    checkVolume();
+  } catch (err) {
+    console.error("Microphone error:", err);
+    alert("Could not access microphone: " + err.message);
+    isRunning = false;
+  }
 });
 
 function checkVolume() {
-    if (!isRunning) return;
+  if (!isRunning) return;
 
-    analyser.getByteFrequencyData(dataArray);
+  analyser.getByteFrequencyData(dataArray);
 
-    // Calculate instant volume
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-        sum += dataArray[i];
-    }
+  // Instant volume (0..255-ish scale)
+  let sum = 0;
+  for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+  const instant = sum / dataArray.length;
 
-    const instant = sum / dataArray.length;
-    const now = Date.now();
+  const now = Date.now();
 
-    // Store timestamped volume
-    volumeHistory.push({
-        time: now,
-        value: instant
-    });
+  // Save timestamped value
+  volumeHistory.push({ time: now, value: instant });
 
-    // Remove values older than 60 seconds
-    const historyWindowMS = 60000;
-    while (
-        volumeHistory.length &&
-        now - volumeHistory[0].time > historyWindowMS
-    ) {
-        volumeHistory.shift();
-    }
+  // Drop anything older than the window
+  while (volumeHistory.length && now - volumeHistory[0].time > historyWindowMS) {
+    volumeHistory.shift();
+  }
 
-    // Compute rolling 60-second average
-    let avgSum = 0;
-    for (let i = 0; i < volumeHistory.length; i++) {
-        avgSum += volumeHistory[i].value;
-    }
+  // Average over window
+  let avgSum = 0;
+  for (let i = 0; i < volumeHistory.length; i++) avgSum += volumeHistory[i].value;
+  const average = avgSum / volumeHistory.length;
 
-    const average = avgSum / volumeHistory.length;
+  volumeLevel.textContent = Math.round(average);
 
-    volumeLevel.textContent = Math.round(average);
+  updateColorAndLabel(average);
 
-    updateColor(average);
-
-    animationId = requestAnimationFrame(checkVolume);
+  animationId = requestAnimationFrame(checkVolume);
 }
 
-function updateColor(level) {
-    const greenMax = parseFloat(document.getElementById("greenMax").value);
-    const yellowMax = parseFloat(document.getElementById("yellowMax").value);
-    const orangeMax = parseFloat(document.getElementById("orangeMax").value);
+function updateColorAndLabel(level) {
+  const greenMax = parseFloat(document.getElementById("greenMax").value);
+  const yellowMax = parseFloat(document.getElementById("yellowMax").value);
+  const orangeMax = parseFloat(document.getElementById("orangeMax").value);
 
-    document.body.className = "";
+  document.body.className = "";
 
-    if (level <= greenMax) {
-        document.body.classList.add("green");
-    } else if (level <= yellowMax) {
-        document.body.classList.add("yellow");
-    } else if (level <= orangeMax) {
-        document.body.classList.add("orange");
-    } else {
-        document.body.classList.add("red");
-    }
+  if (level <= greenMax) {
+    document.body.classList.add("green");
+    zoneLabel.textContent = "GREEN";
+  } else if (level <= yellowMax) {
+    document.body.classList.add("yellow");
+    zoneLabel.textContent = "YELLOW";
+  } else if (level <= orangeMax) {
+    document.body.classList.add("orange");
+    zoneLabel.textContent = "ORANGE";
+  } else {
+    document.body.classList.add("red");
+    zoneLabel.textContent = "RED";
+  }
 }
